@@ -1,0 +1,15 @@
+[Unit]
+Description=Gravación continua da cámara RTSP
+After=network.target
+
+[Service]
+Type=simple
+User=samuel
+WorkingDirectory=/home/samuel/Documentos/vixilancia_ia
+ExecStart=/home/samuel/Documentos/vixilancia_ia/record_cam.sh
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=/home/samuel/Documentos/vixilancia_ia/.env
+
+[Install]
+WantedBy=multi-user.target

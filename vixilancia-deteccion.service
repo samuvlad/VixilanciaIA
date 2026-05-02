@@ -1,0 +1,15 @@
+[Unit]
+Description=Sistema de vixilancia con detección IA (YOLO + Telegram)
+After=network.target
+
+[Service]
+Type=simple
+User=samuel
+WorkingDirectory=/home/samuel/Documentos/vixilancia_ia
+ExecStart=/home/samuel/Documentos/vixilancia_ia/venv/bin/python objectDetention.py
+Restart=on-failure
+RestartSec=10
+EnvironmentFile=/home/samuel/Documentos/vixilancia_ia/.env
+
+[Install]
+WantedBy=multi-user.target
