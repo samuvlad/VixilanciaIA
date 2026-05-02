@@ -6,8 +6,8 @@ Sistema de vixilancia automatizado que usa YOLO para detectar persoas, cans e ga
 
 ```
 Cámara RTSP ──┬── objectDetention.py
-               │     ├── [cada 5s] YOLO → detectado? → cola + foto
-               │     └── [cada 30s] consumidor cola → Telegram (alertas con foto)
+               │     ├── [cada 5s] YOLO → detectado? → msg_queue + foto
+               │     └── [cada 30s] sender_loop → Telegram (alertas con foto)
                │
                └── record_cam.sh ── /mnt/usb/YYYY-MM-DD/ (gravación continua)
 ```
@@ -36,24 +36,36 @@ cp .env.example .env
 nano .env
 ```
 
-## Variables de entorno (.env)
+## Variables de entorno
+
+### Detección (.env.deteccion)
 
 | Variable | Descrición | Por defecto |
 |---|---|---|
 | `TELEGRAM_TOKEN` | Token do bot de Telegram | (obrigatorio) |
 | `TELEGRAM_CHAT_ID` | ID do chat de Telegram | (obrigatorio) |
-| `RTSP_URL` | URL do stream RTSP da cámara | (obrigatorio) |
+| `RTSP_URL_DETECCION` | URL do stream RTSP para detección | (obrigatorio) |
 | `YOLO_MODEL` | Ruta ao modelo YOLO | `yolo11n.pt` |
 | `DETECTION_INTERVAL` | Segundos entre deteccións | `5` |
 | `COOLDOWN` | Segundos entre envíos a Telegram | `30` |
-| `MAX_COLA` | Máximo de alertas na cola | `20` |
+| `MAX_QUEUE` | Máximo de alertas na cola | `20` |
 | `CONF_THRESHOLD` | Umbral de confianza da detección | `0.5` |
 | `RECONNECT_DELAY` | Segundos antes de reconectar | `5` |
 | `READ_TIMEOUT` | Timeout de lectura do stream RTSP (segundos) | `10` |
-| `FOTO_DIR` | Cartafol para fotos temporais de alerta | `/tmp` |
-| `REC_BASE_DEST` | Carpeta destino das gravacións | `/mnt/usb` |
-| `REC_SEGMENT_TIME` | Duración de cada fragmento (segundos) | `300` |
+| `PHOTO_DIR` | Cartafol para fotos temporais de alerta | `/tmp` |
+| `JPEG_QUALITY` | Calidade JPEG das fotos (1-100) | `75` |
+| `YOLO_IMG_SZ` | Tamaño de imaxe para YOLO | `320` |
+
+### Gravación (.env.gravacion)
+
+| Variable | Descrición | Por defecto |
+|---|---|---|
+| `RTSP_URL` | URL do stream RTSP para gravación | `rtsp://camara:camara@192.168.1.42:554/stream1` |
+| `REC_BASE_DEST` | Carpeta destino das gravacións | `/srv/vixilancia` |
+| `REC_SEGMENT_TIME` | Duración de cada fragmento (segundos) | `900` |
 | `REC_FILENAME` | Prefixo dos arquivos de gravación | `cam` |
+| `REC_RECONNECT_DELAY` | Segundos antes de reconectar | `5` |
+| `REC_STIMEOUT` | Timeout RTSP (microsegundos) | `5000000` |
 
 ## Uso manual
 
@@ -68,47 +80,6 @@ python objectDetention.py
 ./record_cam.sh
 ```
 
-## Servizos systemd
-
-###Instalación dos servizos
-
-```bash
-# Copiar os arquivos de servizo
-sudo cp vixilancia-deteccion.service /etc/systemd/system/
-sudo cp vixilancia-gravacion.service /etc/systemd/system/
-
-# Recargar systemd
-sudo systemctl daemon-reload
-
-# Activar e iniciar os servizos
-sudo systemctl enable --now vixilancia-deteccion
-sudo systemctl enable --now vixilancia-gravacion
-```
-
-### Xestión dos servizos
-
-```bash
-# Ver estado
-sudo systemctl status vixilancia-deteccion
-sudo systemctl status vixilancia-gravacion
-
-# Ver logs en tempo real
-sudo journalctl -u vixilancia-deteccion -f
-sudo journalctl -u vixilancia-gravacion -f
-
-# Parar servizos
-sudo systemctl stop vixilancia-deteccion
-sudo systemctl stop vixilancia-gravacion
-
-# Reiniciar servizos
-sudo systemctl restart vixilancia-deteccion
-sudo systemctl restart vixilancia-gravacion
-
-# Desactivar (non se iniciarán ao arrancar)
-sudo systemctl disable vixilancia-deteccion
-sudo systemctl disable vixilancia-gravacion
-```
-
 ## Obxectos detectados
 
 O sistema detecta por defecto:
@@ -119,7 +90,7 @@ O sistema detecta por defecto:
 | 15 | Gato |
 | 16 | Can |
 
-Para modificar os obxectos detectados, edita a lista `OBXECTOS` en `objectDetention.py`.
+Para modificar os obxectos detectados, edita a lista `OBJECTS` en `objectDetention.py`.
 
 ## Como funciona a detección
 
@@ -132,13 +103,11 @@ Para modificar os obxectos detectados, edita a lista `OBXECTOS` en `objectDetent
 
 ```
 vixilancia_ia/
-├── .env                          # Credenciais (non subir a git)
-├── .env.example                  # Plantilla de Variables
+├── .env.deteccion                 # Variables de entorno (detección)
+├── .env.gravacion                 # Variables de entorno (gravación)
 ├── .gitignore
-├── objectDetention.py             # Detección con YOLO + alertas Telegram
-├── record_cam.sh                  # Gravación continua con FFmpeg
-├── requirements.txt               # Dependencias Python
-├── vixilancia-deteccion.service   # Servizo systemd (detección)
-├── vixilancia-gravacion.service   # Servizo systemd (gravación)
-└── yolo11n.pt                     # Modelo YOLO
+├── objectDetention.py              # Detección con YOLO + alertas Telegram
+├── record_cam.sh                   # Gravación continua con FFmpeg
+├── requirements.txt                # Dependencias Python
+└── yolo11n.pt                      # Modelo YOLO
 ```

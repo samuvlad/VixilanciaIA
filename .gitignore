@@ -1,7 +1,9 @@
-.env
+.env.gravacion
+.env.deteccion
 *.pt
 alerta.jpg
 __pycache__/
 *.pyc
 venv/
 .venv/
+*.service

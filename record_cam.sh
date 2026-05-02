@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-ENV_FILE="$SCRIPT_DIR/.env"
+ENV_FILE="$SCRIPT_DIR/.env.gravacion"
 
 if [[ -f "$ENV_FILE" ]]; then
     set -a
@@ -10,10 +10,11 @@ if [[ -f "$ENV_FILE" ]]; then
 fi
 
 CAMERA_URL="${RTSP_URL:-rtsp://camara:camara@192.168.1.42:554/stream1}"
-BASE_DEST="${REC_BASE_DEST:-/mnt/usb}"
-SEGMENT_TIME="${REC_SEGMENT_TIME:-300}"
+BASE_DEST="${REC_BASE_DEST:-/srv/vixilancia}"
+SEGMENT_TIME="${REC_SEGMENT_TIME:-900}"
 FILENAME="${REC_FILENAME:-cam}"
 RECONNECT_DELAY="${REC_RECONNECT_DELAY:-5}"
+STIMEOUT="${REC_STIMEOUT:-5000000}"
 
 mkdir -p "$BASE_DEST"
 
@@ -39,13 +40,16 @@ while true; do
 
     log "Conectando a $CAMERA_URL ..."
 
-    ffmpeg -i "$CAMERA_URL" \
-        -c:v copy \
-        -c:a aac -b:a 64k \
-        -f segment -segment_time "$SEGMENT_TIME" \
-        -reset_timestamps 1 \
-        -strftime 1 \
-        "$DEST/${FILENAME}_%Y%m%d_%H%M%S.mp4"
+    nice -n 10 ionice -c 2 ffmpeg -y -loglevel error \
+    -rtsp_transport tcp \
+    -timeout "$STIMEOUT" \
+    -i "$CAMERA_URL" \
+    -fflags +discardcorrupt \
+    -c:v copy \
+    -an \
+    -movflags +faststart \
+    -f segment -segment_time "$SEGMENT_TIME" -reset_timestamps 1 \
+    -strftime 1 "$DEST/${FILENAME}_%Y%m%d_%H%M%S.mp4"
 
     log "Conexión perdida. Reintentando en ${RECONNECT_DELAY}s..."
     sleep "$RECONNECT_DELAY"

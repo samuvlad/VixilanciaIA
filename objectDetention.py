@@ -11,11 +11,11 @@ from ultralytics import YOLO
 from telegram import Bot
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(Path(__file__).parent / ".env.deteccion")
 
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
-RTSP_URL = os.getenv("RTSP_URL")
+RTSP_URL = os.getenv("RTSP_URL_DETECCION")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -24,159 +24,186 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-MODELO_PATH = os.getenv("YOLO_MODEL", "yolo11n.pt")
-MODELO = YOLO(MODELO_PATH)
+MODEL_PATH = os.getenv("YOLO_MODEL", "yolo11n.pt")
+YOLO_IMG_SZ = int(os.getenv("YOLO_IMG_SZ", "320"))
+MODEL = YOLO(MODEL_PATH)
 
-OBXECTOS = [0, 15, 16]
+OBJECTS = {0, 15, 16}
 COOLDOWN = int(os.getenv("COOLDOWN", "30"))
 DETECTION_INTERVAL = int(os.getenv("DETECTION_INTERVAL", "5"))
 CONF_THRESHOLD = float(os.getenv("CONF_THRESHOLD", "0.5"))
 RECONNECT_DELAY = int(os.getenv("RECONNECT_DELAY", "5"))
 READ_TIMEOUT = int(os.getenv("READ_TIMEOUT", "10"))
-FOTO_DIR = Path(os.getenv("FOTO_DIR", "/tmp"))
-MAX_COLA = int(os.getenv("MAX_COLA", "20"))
-
-executar = True
-cola = queue.Queue(maxsize=MAX_COLA)
+PHOTO_DIR = Path(os.getenv("PHOTO_DIR", "/tmp"))
+PHOTO_DIR.mkdir(parents=True, exist_ok=True)
+MAX_QUEUE = int(os.getenv("MAX_QUEUE", "20"))
+JPEG_QUALITY = int(os.getenv("JPEG_QUALITY", "75"))
 
 if not all([TOKEN, CHAT_ID, RTSP_URL]):
-    logger.error("Faltan variables de entorno. Revisa o arquivo .env")
+    logger.error("Faltan variables de entorno. Revisa o arquivo .env.deteccion")
     raise SystemExit(1)
 
 bot = Bot(token=TOKEN)
 
+_stop = threading.Event()
+msg_queue = queue.Queue(maxsize=MAX_QUEUE)
 
-async def _enviar_telegram(foto_path: Path, etiqueta: str, timestamp: float):
+
+async def _send_telegram(photo_path, label, timestamp):
     try:
         async with bot:
-            with open(foto_path, "rb") as foto:
+            with open(photo_path, "rb") as photo:
                 await bot.send_photo(
                     chat_id=CHAT_ID,
-                    photo=foto,
-                    caption=f"Detectado: {etiqueta}\nHora: {time.strftime('%H:%M:%S', time.localtime(timestamp))}",
+                    photo=photo,
+                    caption=f"Detectado: {label}\nHora: {time.strftime('%H:%M:%S', time.localtime(timestamp))}",
                 )
-        logger.info("Alerta enviada a Telegram: %s", etiqueta)
+        logger.info("Alerta enviada a Telegram: %s", label)
         return True
     except Exception as e:
         logger.error("Erro enviando a Telegram: %s", e)
         return False
 
 
-def consumidor_envios():
+def sender_loop():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
 
-    while executar or not cola.empty():
+    while not _stop.is_set() or not msg_queue.empty():
         try:
-            foto_path, etiqueta, timestamp = cola.get(timeout=1)
+            photo_path, label, timestamp = msg_queue.get(timeout=1)
         except queue.Empty:
             continue
 
-        ok = loop.run_until_complete(_enviar_telegram(foto_path, etiqueta, timestamp))
+        ok = loop.run_until_complete(_send_telegram(photo_path, label, timestamp))
 
         try:
-            foto_path.unlink(missing_ok=True)
+            photo_path.unlink(missing_ok=True)
         except Exception as e:
-            logger.warning("Erro eliminando foto %s: %s", foto_path, e)
+            logger.warning("Erro eliminando foto %s: %s", photo_path, e)
 
         if ok:
             logger.info("Cooldown de %ds antes de seguinte envio...", COOLDOWN)
-            end_time = time.time() + COOLDOWN
-            while executar and time.time() < end_time:
-                time.sleep(min(1, end_time - time.time()))
+            _stop.wait(timeout=COOLDOWN)
         else:
-            time.sleep(5)
+            _stop.wait(timeout=5)
 
     loop.close()
     logger.info("Consumidor de envios pechado.")
 
 
 def signal_handler(signum, frame):
-    global executar
     logger.info("Sinal %s recibido. Pechando...", signal.Signals(signum).name)
-    executar = False
+    _stop.set()
 
 
 signal.signal(signal.SIGINT, signal_handler)
 signal.signal(signal.SIGTERM, signal_handler)
 
 
-def _ler_frame(cap, resultado):
-    ret, frame = cap.read()
-    resultado.append((ret, frame))
+class VideoStream:
+    def __init__(self, url, timeout_ms):
+        self.url = url
+        self.timeout_ms = timeout_ms
+        self._cap = None
+        self._frame = None
+        self._lock = threading.Lock()
+        self._connected = False
+        self._thread = None
 
-
-def detectar():
-    global executar
-
-    hilo_envios = threading.Thread(target=consumidor_envios, daemon=True)
-    hilo_envios.start()
-
-    while executar:
-        logger.info("Conectando a %s ...", RTSP_URL)
-        cap = cv2.VideoCapture(RTSP_URL, cv2.CAP_FFMPEG)
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-
+    def connect(self):
+        self._cap = cv2.VideoCapture(self.url, cv2.CAP_FFMPEG)
+        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if hasattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC"):
-            cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, READ_TIMEOUT * 1000)
+            self._cap.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, self.timeout_ms)
         if hasattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC"):
-            cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, READ_TIMEOUT * 1000)
+            self._cap.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, self.timeout_ms)
+        self._connected = self._cap.isOpened()
+        return self._connected
 
-        if not cap.isOpened():
+    def start(self):
+        self._thread = threading.Thread(target=self._read, daemon=True)
+        self._thread.start()
+
+    def _read(self):
+        while self._connected and not _stop.is_set():
+            ret, frame = self._cap.read()
+            if not ret or frame is None:
+                self._connected = False
+                break
+            with self._lock:
+                self._frame = frame
+
+    def get_latest(self):
+        with self._lock:
+            f = self._frame
+            self._frame = None
+            return f
+
+    def close(self):
+        self._connected = False
+        if self._thread:
+            self._thread.join(timeout=3)
+        if self._cap:
+            self._cap.release()
+
+
+def detect():
+    sender_thread = threading.Thread(target=sender_loop, daemon=True)
+    sender_thread.start()
+
+    while not _stop.is_set():
+        logger.info("Conectando a %s ...", RTSP_URL)
+        stream = VideoStream(RTSP_URL, READ_TIMEOUT * 1000)
+
+        if not stream.connect():
             logger.error("Non se puido conectar ao stream. Reintentando en %ds...", RECONNECT_DELAY)
-            time.sleep(RECONNECT_DELAY)
+            _stop.wait(timeout=RECONNECT_DELAY)
             continue
 
-        logger.info("Conectado. Sistema de vixilancia activo (intervalo=%ds, cooldown=%ds, cola_max=%d)...", DETECTION_INTERVAL, COOLDOWN, MAX_COLA)
+        stream.start()
+        logger.info("Conectado. Sistema de vixilancia activo (intervalo=%ds, cooldown=%ds, queue_max=%d, imgsz=%d)...",
+                     DETECTION_INTERVAL, COOLDOWN, MAX_QUEUE, YOLO_IMG_SZ)
 
-        ultima_deteccion = 0.0
+        last_detection = 0.0
 
         try:
-            while executar and cap.isOpened():
-                resultado = []
-                hilo = threading.Thread(target=_ler_frame, args=(cap, resultado), daemon=True)
-                hilo.start()
-                hilo.join(timeout=READ_TIMEOUT)
-
-                if not resultado:
-                    logger.warning("Timeout lendo frame (%ds). Reconectando...", READ_TIMEOUT)
-                    break
-
-                ret, frame = resultado[0]
-                if not ret or frame is None:
-                    logger.warning("Perdeuse a conexión co stream. Reintentando...")
-                    break
-
-                agora = time.time()
-                if agora - ultima_deteccion < DETECTION_INTERVAL:
+            while not _stop.is_set() and stream._connected:
+                frame = stream.get_latest()
+                if frame is None:
+                    time.sleep(0.05)
                     continue
 
-                results = MODELO(frame, conf=CONF_THRESHOLD, verbose=False)
+                now = time.time()
+                if now - last_detection < DETECTION_INTERVAL:
+                    continue
+
+                results = MODEL(frame, imgsz=YOLO_IMG_SZ, conf=CONF_THRESHOLD, verbose=False)
 
                 for r in results:
                     for box in r.boxes:
                         cls = int(box.cls[0])
-                        if cls in OBXECTOS:
-                            etiqueta = r.names[cls]
-                            logger.info("Deteccion: %s", etiqueta.upper())
+                        if cls in OBJECTS:
+                            label = r.names[cls]
+                            logger.info("Deteccion: %s", label.upper())
 
-                            ts = int(agora * 1000)
-                            foto_path = FOTO_DIR / f"alerta_{ts}.jpg"
-                            cv2.imwrite(str(foto_path), r.plot())
+                            ts = int(now * 1000)
+                            photo_path = PHOTO_DIR / f"alerta_{ts}.jpg"
+                            cv2.imwrite(str(photo_path), r.plot(), [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
 
                             try:
-                                cola.put_nowait((foto_path, etiqueta, agora))
-                                logger.info("Enviado a cola (tamano=%d)", cola.qsize())
+                                msg_queue.put_nowait((photo_path, label, now))
+                                logger.info("Enviado a cola (tamano=%d)", msg_queue.qsize())
                             except queue.Full:
                                 logger.warning("Cola chea, descartando deteccion mais antiga")
                                 try:
-                                    old_path, _, _ = cola.get_nowait()
+                                    old_path, _, _ = msg_queue.get_nowait()
                                     old_path.unlink(missing_ok=True)
                                 except Exception:
                                     pass
-                                cola.put_nowait((foto_path, etiqueta, agora))
+                                msg_queue.put_nowait((photo_path, label, now))
 
-                            ultima_deteccion = agora
+                            last_detection = now
                             break
                     else:
                         continue
@@ -185,15 +212,15 @@ def detectar():
         except Exception as e:
             logger.error("Erro inesperado: %s", e)
         finally:
-            cap.release()
+            stream.close()
 
-        if executar:
+        if not _stop.is_set():
             logger.info("Reconectando en %ds...", RECONNECT_DELAY)
-            time.sleep(RECONNECT_DELAY)
+            _stop.wait(timeout=RECONNECT_DELAY)
 
-    hilo_envios.join(timeout=COOLDOWN + 5)
+    sender_thread.join(timeout=COOLDOWN + 5)
     logger.info("Sistema de vixilancia pechado.")
 
 
 if __name__ == "__main__":
-    detectar()
+    detect()
