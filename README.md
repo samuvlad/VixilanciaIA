@@ -23,17 +23,36 @@ Cámara RTSP ──┬── objectDetention.py
 
 ```bash
 # Clonar o repositorio
-cd /home/samuel/Documentos/vixilancia_ia
+git clone <url-do-repo> /opt/vixilancia_ia
+cd /opt/vixilancia_ia
 
+# Executar o script de instalación (require root)
+sudo ./install.sh
+```
+
+O script `install.sh` encárgase de:
+
+1. Instalar as dependencias do sistema (Python 3, FFmpeg, etc.)
+2. Crear o entorno virtual Python e instalar dependencias
+3. Copiar os `.env.example` a `.env` se non existen
+4. Pedir as variables obrigatorias interactivamente (Token Telegram, Chat ID, URLs RTSP)
+5. Crear o directorio de gravación
+6. Instalar e iniciar os servizos systemd
+
+### Instalación manual
+
+```bash
 # Crear entorno virtual e instalar dependencias
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
 # Copiar e configurar as variables de entorno
-cp .env.example .env
-# Editar .env coas túas credenciais
-nano .env
+cp .env.example.deteccion .env.deteccion
+cp .env.example.gravacion .env.gravacion
+# Editar os .env coas túas credenciais
+nano .env.deteccion
+nano .env.gravacion
 ```
 
 ## Variables de entorno
@@ -60,7 +79,7 @@ nano .env
 
 | Variable | Descrición | Por defecto |
 |---|---|---|
-| `RTSP_URL` | URL do stream RTSP para gravación | `rtsp://camara:camara@192.168.1.42:554/stream1` |
+| `RTSP_URL` | URL do stream RTSP para gravación | (obrigatorio) |
 | `REC_BASE_DEST` | Carpeta destino das gravacións | `/srv/vixilancia` |
 | `REC_SEGMENT_TIME` | Duración de cada fragmento (segundos) | `900` |
 | `REC_FILENAME` | Prefixo dos arquivos de gravación | `cam` |
@@ -105,7 +124,10 @@ Para modificar os obxectos detectados, edita a lista `OBJECTS` en `objectDetenti
 vixilancia_ia/
 ├── .env.deteccion                 # Variables de entorno (detección)
 ├── .env.gravacion                 # Variables de entorno (gravación)
+├── .env.example.deteccion         # Exemplo de config para detección
+├── .env.example.gravacion         # Exemplo de config para gravación
 ├── .gitignore
+├── install.sh                     # Script de instalación automática
 ├── objectDetention.py              # Detección con YOLO + alertas Telegram
 ├── record_cam.sh                   # Gravación continua con FFmpeg
 ├── requirements.txt                # Dependencias Python
