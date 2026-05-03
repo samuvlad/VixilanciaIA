@@ -25,19 +25,29 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 MODEL_PATH = os.getenv("YOLO_MODEL", "yolo11n.pt")
-YOLO_IMG_SZ = int(os.getenv("YOLO_IMG_SZ", "320"))
-MODEL = YOLO(MODEL_PATH)
+YOLO_IMG_SZ = int(os.getenv("YOLO_IMG_SZ", "480"))
+YOLO_DEVICE = os.getenv("YOLO_DEVICE", "cpu")
+_model = None
 
 OBJECTS = {0, 15, 16}
 COOLDOWN = int(os.getenv("COOLDOWN", "30"))
-DETECTION_INTERVAL = int(os.getenv("DETECTION_INTERVAL", "5"))
-CONF_THRESHOLD = float(os.getenv("CONF_THRESHOLD", "0.5"))
+DETECTION_INTERVAL = int(os.getenv("DETECTION_INTERVAL", "2"))
+CONF_THRESHOLD = float(os.getenv("CONF_THRESHOLD", "0.3"))
 RECONNECT_DELAY = int(os.getenv("RECONNECT_DELAY", "5"))
 READ_TIMEOUT = int(os.getenv("READ_TIMEOUT", "10"))
 PHOTO_DIR = Path(os.getenv("PHOTO_DIR", "/tmp"))
 PHOTO_DIR.mkdir(parents=True, exist_ok=True)
 MAX_QUEUE = int(os.getenv("MAX_QUEUE", "20"))
 JPEG_QUALITY = int(os.getenv("JPEG_QUALITY", "75"))
+FRAME_INTERVAL = 1.0 / int(os.getenv("STREAM_FPS", "8"))
+
+
+def get_model():
+    global _model
+    if _model is None:
+        logger.info("Cargando modelo %s en device=%s ...", MODEL_PATH, YOLO_DEVICE)
+        _model = YOLO(MODEL_PATH)
+    return _model
 
 if not all([TOKEN, CHAT_ID, RTSP_URL]):
     logger.error("Faltan variables de entorno. Revisa o arquivo .env.deteccion")
@@ -133,6 +143,8 @@ class VideoStream:
                 break
             with self._lock:
                 self._frame = frame
+            time.sleep(FRAME_INTERVAL)
+            
 
     def get_latest(self):
         with self._lock:
@@ -178,7 +190,14 @@ def detect():
                 if now - last_detection < DETECTION_INTERVAL:
                     continue
 
-                results = MODEL(frame, imgsz=YOLO_IMG_SZ, conf=CONF_THRESHOLD, verbose=False)
+                logger.info("Executando inferencia en frame (shape=%s)...", frame.shape if frame is not None else "None")
+                results = get_model()(frame, imgsz=YOLO_IMG_SZ, conf=CONF_THRESHOLD, verbose=False)
+
+                all_boxes = []
+                for r in results:
+                    for box in r.boxes:
+                        all_boxes.append((int(box.cls[0]), float(box.conf)))
+                logger.info("Caixas: %s", all_boxes)
 
                 for r in results:
                     for box in r.boxes:
@@ -189,7 +208,7 @@ def detect():
 
                             ts = int(now * 1000)
                             photo_path = PHOTO_DIR / f"alerta_{ts}.jpg"
-                            cv2.imwrite(str(photo_path), r.plot(), [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
+                            cv2.imwrite(str(photo_path), frame, [cv2.IMWRITE_JPEG_QUALITY, JPEG_QUALITY])
 
                             try:
                                 msg_queue.put_nowait((photo_path, label, now))
