@@ -1,13 +1,13 @@
 # Sistema de Vixilancia con IA
 
-Sistema de vixilancia automatizado que usa YOLO para detectar persoas, cans e gatos en tempo real mediante unha cámara RTSP, e envía alertas con foto a Telegram. A detección e o envío están desacoplados: as deteccións gárdanse nunha cola e envíase a Telegram respectando un cooldown. Tamén inclúe gravación continua en disco con FFmpeg.
+Sistema de vixilancia automatizado que usa YOLO para detectar persoas, cans e gatos en tempo real mediante unha cámara RTSP, e envía alertas con foto a Telegram. A detección usa un pre-filter de movemento para evitar executar YOLO en frames sen actividade, e o envío a Telegram está desacoplado cun cooldown. Tamén inclúe gravación continua en disco con FFmpeg.
 
 ## Arquitectura
 
 ```
 Cámara RTSP ──┬── objectDetention.py
-               │     ├── [cada 5s] YOLO → detectado? → msg_queue + foto
-               │     └── [cada 30s] sender_loop → Telegram (alertas con foto)
+               │     ├── VideoStream → frame → movemento? → YOLO → detectado? → msg_queue + foto
+               │     └── sender_loop → Telegram (alertas con foto, cooldown 10s)
                │
                └── record_cam.sh ── /mnt/usb/YYYY-MM-DD/ (gravación continua)
 ```
@@ -64,16 +64,17 @@ nano .env.gravacion
 | `TELEGRAM_TOKEN` | Token do bot de Telegram | (obrigatorio) |
 | `TELEGRAM_CHAT_ID` | ID do chat de Telegram | (obrigatorio) |
 | `RTSP_URL_DETECCION` | URL do stream RTSP para detección | (obrigatorio) |
-| `YOLO_MODEL` | Ruta ao modelo YOLO | `yolo11n.pt` |
-| `DETECTION_INTERVAL` | Segundos entre deteccións | `5` |
-| `COOLDOWN` | Segundos entre envíos a Telegram | `30` |
+| `YOLO_MODEL` | Ruta ao modelo YOLO | `yolo11s.pt` |
+| `YOLO_DEVICE` | Dispositivo para inferencia (`cpu`, `cuda`, etc.) | `cpu` |
+| `COOLDOWN` | Segundos entre envíos a Telegram | `10` |
 | `MAX_QUEUE` | Máximo de alertas na cola | `20` |
-| `CONF_THRESHOLD` | Umbral de confianza da detección | `0.5` |
+| `CONF_THRESHOLD` | Umbral de confianza da detección | `0.25` |
+| `MOTION_THRESHOLD` | Proporción mínima de movemento para activar YOLO | `0.005` |
 | `RECONNECT_DELAY` | Segundos antes de reconectar | `5` |
 | `READ_TIMEOUT` | Timeout de lectura do stream RTSP (segundos) | `10` |
 | `PHOTO_DIR` | Cartafol para fotos temporais de alerta | `/tmp` |
 | `JPEG_QUALITY` | Calidade JPEG das fotos (1-100) | `75` |
-| `YOLO_IMG_SZ` | Tamaño de imaxe para YOLO | `320` |
+| `YOLO_IMG_SZ` | Tamaño de imaxe para YOLO | `480` |
 
 ### Gravación (.env.gravacion)
 
@@ -113,10 +114,12 @@ Para modificar os obxectos detectados, edita a lista `OBJECTS` en `objectDetenti
 
 ## Como funciona a detección
 
-1. **Detección continua** — Cada `DETECTION_INTERVAL` segundos (5 por defecto) analízase un frame do stream RTSP con YOLO.
-2. **Cola de alertas** — Cando se detecta un obxecto de interese, gárdase a foto e métese na cola. Se a cola está chea, descártase a alerta máis antiga.
-3. **Envío a Telegram** — Un thread consumidor envía as alertas da cola a Telegram, esperando `COOLDOWN` segundos (30 por defecto) entre envíos.
-4. **Resiliencia** — Se a conexión RTSP se perde, reconéctase automaticamente. Se `cap.read()` se bloquea, un timeout de `READ_TIMEOUT` segundos forza a reconexión.
+1. **Lectura de stream** — O thread `VideoStream` le frames do RTSP con baixa latencia (UDP, nobuffer, low_delay), descartando frames antigos do buffer con `grab()` 3x antes de `retrieve()`.
+2. **Pre-filter de movemento** — Antes de executar YOLO, compróbase se hai movemento no frame usando `BackgroundSubtractorMOG2`. Se a proporción de píxeles en movemento é menor que `MOTION_THRESHOLD`, sáltase a inferencia. Isto reduce drasticamente o uso de CPU.
+3. **Inferencia YOLO** — Cando hai movemento, executase YOLO (`yolo11s` por defecto) coa confianza mínima `CONF_THRESHOLD`.
+4. **Cola de alertas** — Cando se detecta un obxecto de interese, gárdase a foto e métese na cola. Se a cola está chea, descártase a alerta máis antiga.
+5. **Envío a Telegram** — Un thread consumidor envía as alertas da cola a Telegram, esperando `COOLDOWN` segundos (10 por defecto) entre envíos.
+6. **Resiliencia** — Se a conexión RTSP se perde, reconéctase automaticamente. Se `cap.read()` se bloquea, un timeout de `READ_TIMEOUT` segundos forza a reconexión.
 
 ## Estrutura do proxecto
 
@@ -131,5 +134,5 @@ vixilancia_ia/
 ├── objectDetention.py              # Detección con YOLO + alertas Telegram
 ├── record_cam.sh                   # Gravación continua con FFmpeg
 ├── requirements.txt                # Dependencias Python
-└── yolo11n.pt                      # Modelo YOLO
+└── yolo11s.pt                      # Modelo YOLO
 ```
