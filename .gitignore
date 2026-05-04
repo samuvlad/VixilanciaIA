@@ -1,5 +1,6 @@
 .env.gravacion
 .env.deteccion
+.env.web
 *.pt
 alerta.jpg
 __pycache__/

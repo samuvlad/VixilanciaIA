@@ -38,18 +38,23 @@ while true; do
     DEST="$BASE_DEST/$(date +%Y-%m-%d)"
     mkdir -p "$DEST"
 
-    log "Conectando a $CAMERA_URL ..."
+    log "Conectando a $CAMERA_URL (Modo Fluidez MKV)..."
 
-    nice -n 10 ionice -c 2 ffmpeg -y -loglevel error \
+    # Engadimos flags de sincronización agresiva
+    ffmpeg -y -loglevel warning \
+    -use_wallclock_as_timestamps 1 \
+    -fflags +genpts+nobuffer+igndts \
     -rtsp_transport tcp \
-    -timeout "$STIMEOUT" \
+    -thread_queue_size 1024 \
     -i "$CAMERA_URL" \
-    -fflags +discardcorrupt \
     -c:v copy \
+    -map 0 \
     -an \
-    -movflags +faststart \
-    -f segment -segment_time "$SEGMENT_TIME" -reset_timestamps 1 \
-    -strftime 1 "$DEST/${FILENAME}_%Y%m%d_%H%M%S.mp4"
+    -f segment \
+    -segment_time "$SEGMENT_TIME" \
+    -segment_format matroska \
+    -reset_timestamps 1 \
+    -strftime 1 "$DEST/${FILENAME}_%Y%m%d_%H%M%S.mkv"
 
     log "Conexión perdida. Reintentando en ${RECONNECT_DELAY}s..."
     sleep "$RECONNECT_DELAY"

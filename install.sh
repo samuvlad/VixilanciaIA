@@ -78,6 +78,11 @@ check_env_files() {
         cp "$SCRIPT_DIR/.env.example.gravacion" "$SCRIPT_DIR/.env.gravacion"
     fi
 
+    if [[ ! -f "$SCRIPT_DIR/.env.web" ]]; then
+        warn "Non se atopou .env.web. Copiando desde .env.example.web"
+        cp "$SCRIPT_DIR/.env.example.web" "$SCRIPT_DIR/.env.web"
+    fi
+
     echo ""
     info "Configurando variables obrigatorias..."
     echo ""
@@ -150,13 +155,34 @@ RestartSec=10
 WantedBy=multi-user.target
 EOF
 
+    cat > /etc/systemd/system/vixilancia-web.service <<EOF
+[Unit]
+Description=Vixilancia IA - Visor web
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=${SCRIPT_DIR}
+ExecStart=${SCRIPT_DIR}/venv/bin/python web.py
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
     systemctl daemon-reload
     systemctl enable vixilancia-deteccion.service
     systemctl enable vixilancia-gravacion.service
+    systemctl enable vixilancia-web.service
 
     info "Iniciando servizos..."
     systemctl start vixilancia-deteccion.service
     systemctl start vixilancia-gravacion.service
+    systemctl start vixilancia-web.service
 
     sleep 2
 
@@ -165,6 +191,8 @@ EOF
     systemctl status vixilancia-deteccion.service --no-pager -l || true
     echo ""
     systemctl status vixilancia-gravacion.service --no-pager -l || true
+    echo ""
+    systemctl status vixilancia-web.service --no-pager -l || true
 }
 
 main() {
@@ -182,12 +210,16 @@ main() {
     echo "Comandos útiles:"
     echo "  sudo systemctl status vixilancia-deteccion"
     echo "  sudo systemctl status vixilancia-gravacion"
+    echo "  sudo systemctl status vixilancia-web"
     echo "  sudo journalctl -u vixilancia-deteccion -f"
     echo "  sudo journalctl -u vixilancia-gravacion -f"
+    echo "  sudo journalctl -u vixilancia-web -f"
     echo "  sudo systemctl restart vixilancia-deteccion"
     echo "  sudo systemctl restart vixilancia-gravacion"
+    echo "  sudo systemctl restart vixilancia-web"
     echo "  sudo systemctl stop vixilancia-deteccion"
     echo "  sudo systemctl stop vixilancia-gravacion"
+    echo "  sudo systemctl stop vixilancia-web"
 }
 
 main "$@"

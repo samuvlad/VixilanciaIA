@@ -1,15 +1,20 @@
 # Sistema de Vixilancia con IA
 
-Sistema de vixilancia automatizado que usa YOLO para detectar persoas, cans e gatos en tempo real mediante unha cámara RTSP, e envía alertas con foto a Telegram. A detección usa un pre-filter de movemento para evitar executar YOLO en frames sen actividade, e o envío a Telegram está desacoplado cun cooldown. Tamén inclúe gravación continua en disco con FFmpeg.
+Sistema de vixilancia automatizado que usa YOLO para detectar persoas, cans e gatos en tempo real mediante unha cámara RTSP, e envía alertas con foto a Telegram. A detección usa un pre-filter de movemento para evitar executar YOLO en frames sen actividade, e o envío a Telegram está desacoplado cun cooldown. Tamén inclúe gravación continua en disco con FFmpeg e un visor web para consultar as gravacións.
 
 ## Arquitectura
 
 ```
 Cámara RTSP ──┬── objectDetention.py
-               │     ├── VideoStream → frame → movemento? → YOLO → detectado? → msg_queue + foto
-               │     └── sender_loop → Telegram (alertas con foto, cooldown 10s)
-               │
-               └── record_cam.sh ── /mnt/usb/YYYY-MM-DD/ (gravación continua)
+                │     ├── VideoStream → frame → movemento? → YOLO → detectado? → msg_queue + foto
+                │     └── sender_loop → Telegram (alertas con foto, cooldown 10s)
+                │
+                ├── record_cam.sh ── /srv/vixilancia/YYYY-MM-DD/ (gravación continua)
+                │
+                └── web.py ── Visor web (Flask)
+                      ├── Lista de días con gravacións
+                      ├── Concatena fragmentos do día nun só vídeo
+                      └── Reprodutor de vídeo integrado
 ```
 
 ## Requisitos
@@ -50,9 +55,11 @@ pip install -r requirements.txt
 # Copiar e configurar as variables de entorno
 cp .env.example.deteccion .env.deteccion
 cp .env.example.gravacion .env.gravacion
+cp .env.example.web .env.web
 # Editar os .env coas túas credenciais
 nano .env.deteccion
 nano .env.gravacion
+nano .env.web
 ```
 
 ## Variables de entorno
@@ -87,6 +94,16 @@ nano .env.gravacion
 | `REC_RECONNECT_DELAY` | Segundos antes de reconectar | `5` |
 | `REC_STIMEOUT` | Timeout RTSP (microsegundos) | `5000000` |
 
+### Visor web (.env.web)
+
+| Variable | Descrición | Por defecto |
+|---|---|---|
+| `REC_BASE_DEST` | Carpeta destino das gravacións | `/srv/vixilancia` |
+| `WEB_HOST` | Enderezo de escoita do servidor web | `0.0.0.0` |
+| `WEB_PORT` | Porto do servidor web | `5000` |
+| `SEGMENT_MIN_AGE` | Segundos mínimos para considerar un fragmento completo | `10` |
+| `MIN_SEGMENT_SIZE` | Tamaño mínimo de fragmento en bytes para incluír | `10240` |
+
 ## Uso manual
 
 ```bash
@@ -98,7 +115,24 @@ python objectDetention.py
 
 # Executar gravación (noutra terminal)
 ./record_cam.sh
+
+# Executar visor web (noutra terminal)
+python web.py
 ```
+
+O visor web estará dispoñible en `http://<IP>:5000`.
+
+## Visor web
+
+O visor web permite consultar as gravacións gardadas no disco. Funcionalidades:
+
+- Lista de días con gravacións (máis recentes primeiro)
+- Concatenación automática de todos os fragmentos do día nun só vídeo
+- Caché dos vídeos concatenados ( rexenérase automáticamente se hai fragmentos novos)
+- Reprodutor de vídeo integrado con controls de navegación
+- Información de fragmentos e tamaño por día
+
+A concatenación usa FFmpeg con `-c copy` (sen recodificar), polo que é moi rápida. Os vídeos concatenados gárdanse en `/srv/vixilancia/.cache/YYYY-MM-DD.mp4`.
 
 ## Obxectos detectados
 
@@ -127,12 +161,17 @@ Para modificar os obxectos detectados, edita a lista `OBJECTS` en `objectDetenti
 vixilancia_ia/
 ├── .env.deteccion                 # Variables de entorno (detección)
 ├── .env.gravacion                 # Variables de entorno (gravación)
+├── .env.web                       # Variables de entorno (visor web)
 ├── .env.example.deteccion         # Exemplo de config para detección
 ├── .env.example.gravacion         # Exemplo de config para gravación
+├── .env.example.web               # Exemplo de config para visor web
 ├── .gitignore
 ├── install.sh                     # Script de instalación automática
 ├── objectDetention.py              # Detección con YOLO + alertas Telegram
 ├── record_cam.sh                   # Gravación continua con FFmpeg
 ├── requirements.txt                # Dependencias Python
+├── templates/
+│   └── index.html                  # Plantilla HTML do visor web
+├── web.py                          # Visor web (Flask)
 └── yolo11s.pt                      # Modelo YOLO
 ```
