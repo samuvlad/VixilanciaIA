@@ -156,7 +156,7 @@ def video(date_str):
     path = concat_day(date_str)
     if path is None:
         abort(404)
-    return send_file(str(path), mimetype="video/mp4")
+    return send_file(str(path), mimetype="video/mp4", conditional=True)
 
 
 @app.route("/api/days")
