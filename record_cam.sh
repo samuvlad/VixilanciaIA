@@ -22,8 +22,20 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') [INFO] $*"
 }
 
+MIN_SIZE_KB="${REC_MIN_SIZE_KB:-400}"
+
+cleanup_small_files() {
+    while true; do
+        find "$BASE_DEST" -name "*.mkv" -mmin +1 -size -${MIN_SIZE_KB}k -printf 'Descartando: %p (%s bytes)\n' -delete 2>/dev/null
+        sleep 300
+    done
+}
+
+CLEANUP_PID=""
+
 cleanup() {
     log "Sinal recibido. Pechando gravación..."
+    [ -n "$CLEANUP_PID" ] && kill "$CLEANUP_PID" 2>/dev/null
     kill $(jobs -p) 2>/dev/null
     exit 0
 }
@@ -33,6 +45,10 @@ trap cleanup SIGINT SIGTERM
 log "Sistema de gravación iniciado"
 log "Cámara: $CAMERA_URL"
 log "Destino: $BASE_DEST"
+log "Tamaño mínimo por segmento: ${MIN_SIZE_KB}KB"
+
+cleanup_small_files &
+CLEANUP_PID=$!
 
 while true; do
     DEST="$BASE_DEST/$(date +%Y-%m-%d)"
