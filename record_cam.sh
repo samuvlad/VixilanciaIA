@@ -22,12 +22,12 @@ log() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') [INFO] $*"
 }
 
-MIN_SIZE_KB="${REC_MIN_SIZE_KB:-400}"
+MIN_SIZE_KB="${REC_MIN_SIZE_KB:-300}"
 
 cleanup_small_files() {
     while true; do
-        find "$BASE_DEST" -name "*.mkv" -mmin +1 -size -${MIN_SIZE_KB}k -printf 'Descartando: %p (%s bytes)\n' -delete 2>/dev/null
-        sleep 300
+        find "$BASE_DEST" -name "*.mkv" -size -${MIN_SIZE_KB}k ! -newermt "now -1 minute" -printf 'Descartando: %p (%s bytes)\n' -delete 2>/dev/null
+        sleep 60
     done
 }
 
