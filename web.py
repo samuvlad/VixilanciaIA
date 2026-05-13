@@ -1,5 +1,6 @@
 import logging
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -19,6 +20,8 @@ HOST = os.getenv("WEB_HOST", "0.0.0.0")
 PORT = int(os.getenv("WEB_PORT", "5000"))
 SEGMENT_MIN_AGE = int(os.getenv("SEGMENT_MIN_AGE", "10"))
 MIN_SEGMENT_SIZE = int(os.getenv("MIN_SEGMENT_SIZE", "10240"))
+MAX_AGE_DAYS = int(os.getenv("MAX_AGE_DAYS", "7"))
+CLEANUP_INTERVAL = int(os.getenv("CLEANUP_INTERVAL", "3600"))
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,6 +39,57 @@ def _get_lock(key):
         if key not in _concat_locks:
             _concat_locks[key] = threading.Lock()
         return _concat_locks[key]
+
+
+def cleanup_old_videos():
+    if not BASE_DEST.exists():
+        return
+
+    cutoff = time.time() - (MAX_AGE_DAYS * 86400)
+    removed = 0
+    freed = 0
+
+    for day_dir in sorted(BASE_DEST.iterdir()):
+        if not day_dir.is_dir() or day_dir.name.startswith("."):
+            continue
+        try:
+            st = day_dir.stat()
+        except OSError:
+            continue
+        if st.st_mtime < cutoff:
+            size = sum(f.stat().st_size for f in day_dir.rglob("*") if f.is_file())
+            try:
+                shutil.rmtree(day_dir)
+                logger.info("Eliminado directorio %s (%s liberados)", day_dir.name, format_size(size))
+                removed += 1
+                freed += size
+            except OSError as e:
+                logger.error("Erro eliminando %s: %s", day_dir, e)
+
+    if CACHE_DIR.exists():
+        for cache_file in CACHE_DIR.glob("*.mp4"):
+            try:
+                day_name = cache_file.stem
+                day_path = BASE_DEST / day_name
+                if not day_path.exists():
+                    size = cache_file.stat().st_size
+                    cache_file.unlink()
+                    logger.info("Eliminado cache orfo %s (%s)", cache_file.name, format_size(size))
+                    freed += size
+            except OSError:
+                continue
+
+    if removed > 0 or freed > 0:
+        logger.info("Limpieza: %d directorios eliminados, %s liberados", removed, format_size(freed))
+
+
+def _cleanup_loop():
+    while True:
+        try:
+            cleanup_old_videos()
+        except Exception:
+            logger.exception("Erro na limpieza periódica")
+        time.sleep(CLEANUP_INTERVAL)
 
 
 def get_days():
@@ -204,4 +258,7 @@ def api_segments(date_str):
 
 
 if __name__ == "__main__":
+    cleanup = threading.Thread(target=_cleanup_loop, daemon=True)
+    cleanup.start()
+    logger.info("Limpieza automática: videos > %d dias serán eliminados cada %ds", MAX_AGE_DAYS, CLEANUP_INTERVAL)
     app.run(host=HOST, port=PORT, threaded=True)
